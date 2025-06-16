@@ -43,7 +43,7 @@ router.post(
         });
       }
 
-      const { name, email, password } = req.body;
+      const { name, email, password, role } = req.body;
 
       // Check if user already exists
       const existingUser = await User.findOne({ email });
@@ -59,6 +59,7 @@ router.post(
         name,
         email,
         password,
+        role,
       });
 
       await user.save();
