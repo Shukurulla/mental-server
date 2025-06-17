@@ -65,6 +65,12 @@ export const getDashboardStats = async (req, res) => {
       { $limit: 30 },
     ]);
 
+    // YANGI: Real user leaderboard data
+    const globalLeaderboard = await User.find({ isActive: true })
+      .select("name avatar totalScore level gamesPlayed")
+      .sort({ totalScore: -1, level: -1, gamesPlayed: -1 })
+      .limit(50);
+
     res.json({
       success: true,
       data: {
@@ -84,6 +90,7 @@ export const getDashboardStats = async (req, res) => {
         },
         popularGames,
         userActivity,
+        leaderboard: globalLeaderboard, // Qo'shilgan
       },
     });
   } catch (error) {

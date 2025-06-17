@@ -1,3 +1,4 @@
+// routes/results.js - Global leaderboard endpointini to'liq qayta yozish
 import express from "express";
 import { body, validationResult } from "express-validator";
 import auth from "../middleware/auth.js";
@@ -95,22 +96,67 @@ router.get("/leaderboard/:gameType", async (req, res) => {
 // @access  Public
 router.get("/leaderboard/global", async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = parseInt(req.query.limit) || 50;
 
-    const globalLeaderboard = await User.find({ isActive: true })
-      .select("name avatar level totalScore gamesPlayed")
-      .sort({ totalScore: -1, level: -1 })
-      .limit(limit);
+    console.log("Global leaderboard so'raldi, limit:", limit);
+
+    // Avval User collection'da ma'lumot borligini tekshiramiz
+    const totalUsersCount = await User.countDocuments({ isActive: true });
+    console.log("Jami faol foydalanuvchilar soni:", totalUsersCount);
+
+    if (totalUsersCount === 0) {
+      console.log("Faol foydalanuvchilar topilmadi");
+      return res.json({
+        success: true,
+        data: [],
+        message: "Hali faol foydalanuvchilar yo'q",
+      });
+    }
+
+    // Oddiy query bilan barcha faol userlarni olish
+    const users = await User.find({ isActive: true })
+      .select(
+        "name email avatar totalScore level gamesPlayed rankingScore averageScore streak createdAt"
+      )
+      .sort({ totalScore: -1, level: -1, gamesPlayed: -1 })
+      .limit(limit)
+      .lean(); // .lean() performance uchun
+
+    console.log("Topilgan userlar soni:", users.length);
+    console.log("Birinchi user:", users[0]);
+
+    // Ranking score hisoblash va rank qo'shish
+    const rankedUsers = users.map((user, index) => {
+      // Agar rankingScore yo'q bo'lsa, hisoblash
+      const rankingScore = user.rankingScore || calculateRankingScore(user);
+
+      return {
+        _id: user._id,
+        name: user.name || "Noma'lum foydalanuvchi",
+        avatar: user.avatar || null,
+        totalScore: user.totalScore || 0,
+        level: user.level || 1,
+        gamesPlayed: user.gamesPlayed || 0,
+        rankingScore: rankingScore,
+        averageScore: user.averageScore || 0,
+        streak: user.streak || 0,
+        rank: index + 1,
+      };
+    });
+
+    console.log("Qaytarilayotgan ma'lumotlar:", rankedUsers.slice(0, 3));
 
     res.json({
       success: true,
-      data: globalLeaderboard,
+      data: rankedUsers,
+      total: totalUsersCount,
     });
   } catch (error) {
-    console.error("Get global leaderboard error:", error);
+    console.error("Global leaderboard xatosi:", error);
     res.status(500).json({
       success: false,
-      message: "Server xatosi",
+      message: "Server xatosi: " + error.message,
+      data: [],
     });
   }
 });
@@ -177,64 +223,60 @@ router.get("/stats", auth, async (req, res) => {
 // @route   GET /api/results/progress/:gameType
 // @desc    Get user's progress for specific game type
 // @access  Private
-router.get("/progress/:gameType", auth, async (req, res) => {
+router.get("/leaderboard/global", async (req, res) => {
   try {
-    const { gameType } = req.params;
-    const days = parseInt(req.query.days) || 30;
+    const limit = parseInt(req.query.limit) || 50;
 
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-
-    // Get progress data
-    const progressData = await GameResult.aggregate([
+    // Aniq ranking algoritmi
+    const globalLeaderboard = await User.aggregate([
+      { $match: { isActive: true } },
       {
-        $match: {
-          userId: req.user.userId,
-          gameType,
-          createdAt: { $gte: startDate },
-        },
-      },
-      {
-        $group: {
-          _id: {
-            date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+        $addFields: {
+          // Ranking formulasi: totalScore * 0.7 + level * 100 + gamesPlayed * 2
+          rankingScore: {
+            $add: [
+              { $multiply: ["$totalScore", 0.7] },
+              { $multiply: ["$level", 100] },
+              { $multiply: ["$gamesPlayed", 2] },
+            ],
           },
-          avgScore: { $avg: "$score" },
-          maxScore: { $max: "$score" },
-          gamesPlayed: { $sum: 1 },
-          avgDuration: { $avg: "$duration" },
-          avgAccuracy: { $avg: "$accuracy" },
         },
       },
-      { $sort: { "_id.date": 1 } },
+      {
+        $sort: {
+          rankingScore: -1,
+          totalScore: -1,
+          level: -1,
+          gamesPlayed: -1,
+          _id: 1, // Consistent sorting
+        },
+      },
+      { $limit: limit },
+      {
+        $project: {
+          name: 1,
+          avatar: 1,
+          totalScore: 1,
+          level: 1,
+          gamesPlayed: 1,
+          rankingScore: 1,
+        },
+      },
     ]);
 
-    // Get overall stats for this game type
-    const overallStats = await GameResult.aggregate([
-      { $match: { userId: req.user.userId, gameType } },
-      {
-        $group: {
-          _id: null,
-          totalGames: { $sum: 1 },
-          bestScore: { $max: "$score" },
-          avgScore: { $avg: "$score" },
-          bestLevel: { $max: "$level" },
-          totalTime: { $sum: "$duration" },
-          avgAccuracy: { $avg: "$accuracy" },
-        },
-      },
-    ]);
+    // Add rank numbers
+    const rankedLeaderboard = globalLeaderboard.map((user, index) => ({
+      ...user,
+      rank: index + 1,
+    }));
+    console.log(globalLeaderboard);
 
     res.json({
       success: true,
-      data: {
-        progressData,
-        overallStats: overallStats[0] || {},
-        period: `${days} kun`,
-      },
+      data: rankedLeaderboard,
     });
   } catch (error) {
-    console.error("Get progress error:", error);
+    console.error("Get global leaderboard error:", error);
     res.status(500).json({
       success: false,
       message: "Server xatosi",
@@ -508,5 +550,152 @@ router.get("/analytics/personal", auth, async (req, res) => {
     });
   }
 });
+router.get("/debug-users", async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const activeUsers = await User.countDocuments({ isActive: true });
+    const sampleUsers = await User.find()
+      .limit(5)
+      .select("name email isActive totalScore level gamesPlayed");
+
+    res.json({
+      success: true,
+      debug: {
+        totalUsers,
+        activeUsers,
+        sampleUsers,
+        databaseConnected: true,
+      },
+    });
+  } catch (error) {
+    console.error("Debug xatosi:", error);
+    res.json({
+      success: false,
+      debug: {
+        error: error.message,
+        databaseConnected: false,
+      },
+    });
+  }
+});
+
+router.post("/create-sample-users", async (req, res) => {
+  try {
+    // Faqat development environmentda ishlash
+    if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({
+        success: false,
+        message: "Bu endpoint faqat development uchun",
+      });
+    }
+
+    const existingUsers = await User.countDocuments();
+    if (existingUsers > 0) {
+      return res.json({
+        success: true,
+        message: "Userlar allaqachon mavjud",
+        count: existingUsers,
+      });
+    }
+
+    // Sample userlar
+    const sampleUsers = [
+      {
+        name: "Aziz Rahmonov",
+        email: "aziz@test.com",
+        password: "123456",
+        totalScore: 15000,
+        level: 16,
+        gamesPlayed: 50,
+        averageScore: 300,
+        streak: 12,
+        isActive: true,
+      },
+      {
+        name: "Malika Toshmatova",
+        email: "malika@test.com",
+        password: "123456",
+        totalScore: 12000,
+        level: 13,
+        gamesPlayed: 40,
+        averageScore: 300,
+        streak: 8,
+        isActive: true,
+      },
+      {
+        name: "Bobur Akramov",
+        email: "bobur@test.com",
+        password: "123456",
+        totalScore: 10000,
+        level: 11,
+        gamesPlayed: 35,
+        averageScore: 285,
+        streak: 5,
+        isActive: true,
+      },
+      {
+        name: "Zarina Karimova",
+        email: "zarina@test.com",
+        password: "123456",
+        totalScore: 8000,
+        level: 9,
+        gamesPlayed: 30,
+        averageScore: 266,
+        streak: 3,
+        isActive: true,
+      },
+      {
+        name: "Jasur Nazarov",
+        email: "jasur@test.com",
+        password: "123456",
+        totalScore: 6000,
+        level: 7,
+        gamesPlayed: 25,
+        averageScore: 240,
+        streak: 2,
+        isActive: true,
+      },
+    ];
+
+    // Userlarni yaratish
+    const createdUsers = [];
+    for (const userData of sampleUsers) {
+      const user = new User(userData);
+      await user.save();
+      createdUsers.push({
+        name: user.name,
+        totalScore: user.totalScore,
+        level: user.level,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Sample userlar yaratildi",
+      users: createdUsers,
+    });
+  } catch (error) {
+    console.error("Sample userlar yaratishda xato:", error);
+    res.status(500).json({
+      success: false,
+      message: "Xato: " + error.message,
+    });
+  }
+});
+function calculateRankingScore(user) {
+  const totalScore = user.totalScore || 0;
+  const level = user.level || 1;
+  const gamesPlayed = user.gamesPlayed || 0;
+  const averageScore = user.averageScore || 0;
+  const streak = user.streak || 0;
+
+  return Math.round(
+    totalScore * 0.5 +
+      level * 150 +
+      gamesPlayed * 3 +
+      averageScore * 0.3 +
+      streak * 10
+  );
+}
 
 export default router;
