@@ -69,6 +69,19 @@ const GAME_TYPES = {
     maxLevel: 15,
     scoreMultiplier: 13,
   },
+  // NEW GAMES
+  flashAnzan: {
+    name: "Flash Anzan",
+    description: "Tez ko'rsatiladigan raqamlarni qo'shing yoki ayiring",
+    maxLevel: 20,
+    scoreMultiplier: 20,
+  },
+  flashCards: {
+    name: "Flash Cards",
+    description: "Kartalar orqali tez hisoblash qobiliyatini rivojlantiring",
+    maxLevel: 20,
+    scoreMultiplier: 18,
+  },
 };
 
 // @desc    Get all available games
@@ -198,12 +211,27 @@ export const submitGameResult = async (req, res) => {
 
     // Update user stats
     const user = await User.findById(req.user.userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Foydalanuvchi topilmadi",
+      });
+    }
+
+    // Calculate if this is a time-based game
     const isTimeScore = [
       "schulteTable",
       "doubleSchulte",
       "readingSpeed",
     ].includes(gameType);
+
+    // Update user's game statistics
     user.updateGameStats(gameType, score, isTimeScore);
+
+    // Calculate ranking score using the new formula
+    const newRankingScore = calculateUserRankingScore(user);
+    user.rankingScore = newRankingScore;
+
     await user.save();
 
     res.json({
@@ -216,6 +244,7 @@ export const submitGameResult = async (req, res) => {
         accuracy: gameResult.accuracy,
         newTotalScore: user.totalScore,
         newLevel: user.level,
+        newRankingScore: user.rankingScore,
       },
     });
   } catch (error) {
@@ -226,6 +255,24 @@ export const submitGameResult = async (req, res) => {
     });
   }
 };
+
+// Helper function to calculate user's ranking score
+function calculateUserRankingScore(user) {
+  const totalScore = user.totalScore || 0;
+  const level = user.level || 1;
+  const gamesPlayed = user.gamesPlayed || 0;
+  const averageScore = gamesPlayed > 0 ? totalScore / gamesPlayed : 0;
+  const streak = user.streak || 0;
+
+  // Ranking formula: totalScore * 0.5 + level * 150 + gamesPlayed * 3 + averageScore * 0.3 + streak * 10
+  return Math.round(
+    totalScore * 0.5 +
+      level * 150 +
+      gamesPlayed * 3 +
+      averageScore * 0.3 +
+      streak * 10
+  );
+}
 
 // Helper function to generate game content
 function generateGameContent(gameType, level, settings) {
@@ -252,12 +299,108 @@ function generateGameContent(gameType, level, settings) {
       return generateReadingText(level, settings);
     case "hideAndSeek":
       return generateHideAndSeekPattern(level, settings);
+    case "flashAnzan":
+      return generateFlashAnzanSequence(level, settings);
+    case "flashCards":
+      return generateFlashCardsSequence(level, settings);
     default:
       return {};
   }
 }
 
-// Game content generators
+// Flash Anzan content generator
+function generateFlashAnzanSequence(level, settings) {
+  const digitCount = settings.digitCount || 1;
+  const sequenceLength = settings.sequenceLength || 5;
+  const operation = settings.operation || "add";
+
+  const sequence = [];
+  const operations = [];
+
+  for (let i = 0; i < sequenceLength; i++) {
+    // Generate number based on digit count
+    const min = Math.pow(10, digitCount - 1);
+    const max = Math.pow(10, digitCount) - 1;
+    const number = Math.floor(Math.random() * (max - min + 1)) + min;
+
+    sequence.push(number);
+
+    // Generate operation
+    if (i === 0) {
+      operations.push("+");
+    } else {
+      if (operation === "add") {
+        operations.push("+");
+      } else if (operation === "subtract") {
+        operations.push("-");
+      } else {
+        // mixed
+        operations.push(Math.random() > 0.5 ? "+" : "-");
+      }
+    }
+  }
+
+  // Calculate correct answer
+  let answer = sequence[0];
+  for (let i = 1; i < sequence.length; i++) {
+    if (operations[i] === "+") {
+      answer += sequence[i];
+    } else {
+      answer -= sequence[i];
+    }
+  }
+
+  return {
+    sequence,
+    operations,
+    correctAnswer: answer,
+    displayTime: settings.displayTime || 1000,
+  };
+}
+
+// Flash Cards content generator
+function generateFlashCardsSequence(level, settings) {
+  const sequenceLength = settings.sequenceLength || 5;
+  const cardType = settings.cardType || "soroban";
+
+  const sequence = [];
+  let total = 0;
+
+  for (let i = 0; i < sequenceLength; i++) {
+    const number = Math.floor(Math.random() * 10); // 0-9
+
+    let cardData = { number };
+
+    if (cardType === "soroban") {
+      // Generate soroban segments
+      const segments = Array(7).fill(1);
+      // Hide 1-2 random segments
+      const segmentsToHide = Math.floor(Math.random() * 2) + 1;
+      const hideIndices = [];
+
+      while (hideIndices.length < segmentsToHide) {
+        const randomIndex = Math.floor(Math.random() * 7);
+        if (!hideIndices.includes(randomIndex)) {
+          hideIndices.push(randomIndex);
+          segments[randomIndex] = 0;
+        }
+      }
+
+      cardData.segments = segments;
+    }
+
+    sequence.push(cardData);
+    total += number;
+  }
+
+  return {
+    sequence,
+    correctAnswer: total,
+    displayTime: settings.displayTime || 1000,
+  };
+}
+
+// Existing game content generators (keeping the same)
 function generateNumberSequence(level, settings) {
   const length = Math.min(3 + level, 15);
   const sequence = Array.from({ length }, () => Math.floor(Math.random() * 10));

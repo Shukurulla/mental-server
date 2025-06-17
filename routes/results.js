@@ -1,4 +1,3 @@
-// routes/results.js - Global leaderboard endpointini to'liq qayta yozish
 import express from "express";
 import { body, validationResult } from "express-validator";
 import auth from "../middleware/auth.js";
@@ -46,7 +45,9 @@ router.get("/user/all", auth, async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit)
-      .select("gameType score level duration accuracy createdAt");
+      .select(
+        "gameType score level duration accuracy createdAt gameRankingScore"
+      );
 
     const total = await GameResult.countDocuments({ userId: req.user.userId });
 
@@ -74,19 +75,33 @@ router.get("/user/all", auth, async (req, res) => {
 router.get("/leaderboard/:gameType", async (req, res) => {
   try {
     const { gameType } = req.params;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = parseInt(req.query.limit) || 50;
+
+    console.log(`Getting leaderboard for ${gameType}, limit: ${limit}`);
 
     const leaderboard = await GameResult.getLeaderboard(gameType, limit);
 
+    // Add rank to each user
+    const rankedLeaderboard = leaderboard.map((user, index) => ({
+      ...user,
+      rank: index + 1,
+    }));
+
+    console.log(
+      `Found ${rankedLeaderboard.length} users for ${gameType} leaderboard`
+    );
+
     res.json({
       success: true,
-      data: leaderboard,
+      data: rankedLeaderboard,
+      total: rankedLeaderboard.length,
     });
   } catch (error) {
     console.error("Get leaderboard error:", error);
     res.status(500).json({
       success: false,
-      message: "Server xatosi",
+      message: "Server xatosi: " + error.message,
+      data: [],
     });
   }
 });
@@ -98,61 +113,26 @@ router.get("/leaderboard/global", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
 
-    console.log("Global leaderboard so'raldi, limit:", limit);
+    console.log("Getting global leaderboard, limit:", limit);
 
-    // Avval User collection'da ma'lumot borligini tekshiramiz
-    const totalUsersCount = await User.countDocuments({ isActive: true });
-    console.log("Jami faol foydalanuvchilar soni:", totalUsersCount);
+    // Use the static method from User model
+    const users = await User.getGlobalLeaderboard(limit);
 
-    if (totalUsersCount === 0) {
-      console.log("Faol foydalanuvchilar topilmadi");
-      return res.json({
-        success: true,
-        data: [],
-        message: "Hali faol foydalanuvchilar yo'q",
-      });
-    }
+    console.log(`Found ${users.length} users for global leaderboard`);
 
-    // Oddiy query bilan barcha faol userlarni olish
-    const users = await User.find({ isActive: true })
-      .select(
-        "name email avatar totalScore level gamesPlayed rankingScore averageScore streak createdAt"
-      )
-      .sort({ totalScore: -1, level: -1, gamesPlayed: -1 })
-      .limit(limit)
-      .lean(); // .lean() performance uchun
-
-    console.log("Topilgan userlar soni:", users.length);
-    console.log("Birinchi user:", users[0]);
-
-    // Ranking score hisoblash va rank qo'shish
-    const rankedUsers = users.map((user, index) => {
-      // Agar rankingScore yo'q bo'lsa, hisoblash
-      const rankingScore = user.rankingScore || calculateRankingScore(user);
-
-      return {
-        _id: user._id,
-        name: user.name || "Noma'lum foydalanuvchi",
-        avatar: user.avatar || null,
-        totalScore: user.totalScore || 0,
-        level: user.level || 1,
-        gamesPlayed: user.gamesPlayed || 0,
-        rankingScore: rankingScore,
-        averageScore: user.averageScore || 0,
-        streak: user.streak || 0,
-        rank: index + 1,
-      };
-    });
-
-    console.log("Qaytarilayotgan ma'lumotlar:", rankedUsers.slice(0, 3));
+    // Add rank to each user
+    const rankedUsers = users.map((user, index) => ({
+      ...user,
+      rank: index + 1,
+    }));
 
     res.json({
       success: true,
       data: rankedUsers,
-      total: totalUsersCount,
+      total: rankedUsers.length,
     });
   } catch (error) {
-    console.error("Global leaderboard xatosi:", error);
+    console.error("Global leaderboard error:", error);
     res.status(500).json({
       success: false,
       message: "Server xatosi: " + error.message,
@@ -179,7 +159,7 @@ router.get("/stats", auth, async (req, res) => {
     const recentResults = await GameResult.find({ userId: req.user.userId })
       .sort({ createdAt: -1 })
       .limit(10)
-      .select("gameType score level duration createdAt");
+      .select("gameType score level duration createdAt gameRankingScore");
 
     // Get best scores for each game type
     const bestScores = await GameResult.aggregate([
@@ -192,15 +172,18 @@ router.get("/stats", auth, async (req, res) => {
           avgScore: { $avg: "$score" },
           bestLevel: { $max: "$level" },
           totalDuration: { $sum: "$duration" },
+          gameRankingScore: { $max: "$gameRankingScore" },
+          lastPlayed: { $max: "$createdAt" },
         },
       },
     ]);
 
-    // Get user rank
-    const userRank =
-      (await User.countDocuments({
-        totalScore: { $gt: user.totalScore },
-      })) + 1;
+    // Get user rank in global leaderboard
+    const higherRankedCount = await User.countDocuments({
+      rankingScore: { $gt: user.rankingScore },
+      isActive: true,
+    });
+    const userRank = higherRankedCount + 1;
 
     res.json({
       success: true,
@@ -223,60 +206,54 @@ router.get("/stats", auth, async (req, res) => {
 // @route   GET /api/results/progress/:gameType
 // @desc    Get user's progress for specific game type
 // @access  Private
-router.get("/leaderboard/global", async (req, res) => {
+router.get("/progress/:gameType", auth, async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 50;
+    const { gameType } = req.params;
+    const days = parseInt(req.query.days) || 30;
 
-    // Aniq ranking algoritmi
-    const globalLeaderboard = await User.aggregate([
-      { $match: { isActive: true } },
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    // Get user's progress over time
+    const progress = await GameResult.aggregate([
       {
-        $addFields: {
-          // Ranking formulasi: totalScore * 0.7 + level * 100 + gamesPlayed * 2
-          rankingScore: {
-            $add: [
-              { $multiply: ["$totalScore", 0.7] },
-              { $multiply: ["$level", 100] },
-              { $multiply: ["$gamesPlayed", 2] },
-            ],
+        $match: {
+          userId: req.user.userId,
+          gameType,
+          createdAt: { $gte: startDate },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
           },
+          avgScore: { $avg: "$score" },
+          maxScore: { $max: "$score" },
+          gamesPlayed: { $sum: 1 },
+          avgDuration: { $avg: "$duration" },
+          avgAccuracy: { $avg: "$accuracy" },
         },
       },
-      {
-        $sort: {
-          rankingScore: -1,
-          totalScore: -1,
-          level: -1,
-          gamesPlayed: -1,
-          _id: 1, // Consistent sorting
-        },
-      },
-      { $limit: limit },
       {
         $project: {
-          name: 1,
-          avatar: 1,
-          totalScore: 1,
-          level: 1,
+          date: "$_id.date",
+          avgScore: { $round: ["$avgScore", 2] },
+          maxScore: 1,
           gamesPlayed: 1,
-          rankingScore: 1,
+          avgDuration: { $round: ["$avgDuration", 2] },
+          avgAccuracy: { $round: ["$avgAccuracy", 2] },
         },
       },
+      { $sort: { date: 1 } },
     ]);
-
-    // Add rank numbers
-    const rankedLeaderboard = globalLeaderboard.map((user, index) => ({
-      ...user,
-      rank: index + 1,
-    }));
-    console.log(globalLeaderboard);
 
     res.json({
       success: true,
-      data: rankedLeaderboard,
+      data: progress,
     });
   } catch (error) {
-    console.error("Get global leaderboard error:", error);
+    console.error("Get progress error:", error);
     res.status(500).json({
       success: false,
       message: "Server xatosi",
@@ -359,7 +336,7 @@ router.post("/compare", auth, async (req, res) => {
 router.get("/achievements", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).select(
-      "achievements gameStats totalScore level"
+      "achievements gameStats totalScore level gamesPlayed"
     );
 
     // Calculate potential new achievements
@@ -408,13 +385,34 @@ router.get("/achievements", auth, async (req, res) => {
       }
     }
 
+    // Games played achievements
+    const gamesThresholds = [10, 50, 100, 500, 1000];
+    for (const threshold of gamesThresholds) {
+      if (user.gamesPlayed >= threshold) {
+        const achievement = {
+          name: `${threshold} O'yin`,
+          description: `${threshold} ta o'yin o'ynash yutuqi`,
+          icon: "🎮",
+          category: "games",
+          unlockedAt: new Date(),
+        };
+
+        const hasAchievement = user.achievements.some(
+          (a) => a.name === achievement.name
+        );
+        if (!hasAchievement) {
+          newAchievements.push(achievement);
+        }
+      }
+    }
+
     // Game-specific achievements
     Object.entries(user.gameStats).forEach(([gameType, stats]) => {
       if (stats.gamesPlayed >= 10) {
         const achievement = {
           name: `${gameType} Mutaxassisi`,
           description: `${gameType} o'yinida 10 marta o'ynash`,
-          icon: "🎮",
+          icon: "🎯",
           category: "games",
           unlockedAt: new Date(),
         };
@@ -504,6 +502,7 @@ router.get("/analytics/personal", auth, async (req, res) => {
           },
           count: { $sum: 1 },
           avgScore: { $avg: "$score" },
+          totalScore: { $sum: "$score" },
         },
       },
       { $sort: { "_id.date": 1 } },
@@ -520,26 +519,38 @@ router.get("/analytics/personal", auth, async (req, res) => {
           bestScore: { $max: "$score" },
           gamesPlayed: { $sum: 1 },
           avgDuration: { $avg: "$duration" },
-          improvement: {
-            $avg: {
-              $subtract: ["$score", { $avg: "$score" }],
-            },
-          },
+          totalScore: { $sum: "$score" },
+          avgAccuracy: { $avg: "$accuracy" },
+          gameRankingScore: { $max: "$gameRankingScore" },
+        },
+      },
+      {
+        $project: {
+          gameType: "$_id",
+          avgScore: { $round: ["$avgScore", 2] },
+          bestScore: 1,
+          gamesPlayed: 1,
+          avgDuration: { $round: ["$avgDuration", 2] },
+          totalScore: 1,
+          avgAccuracy: { $round: ["$avgAccuracy", 2] },
+          gameRankingScore: 1,
         },
       },
     ]);
 
-    // Best streaks
-    const bestStreaks = await GameResult.find({ userId })
+    // Best streaks and improvement trends
+    const recentResults = await GameResult.find({ userId })
       .sort({ createdAt: 1 })
-      .select("gameType score createdAt");
+      .select("gameType score createdAt duration accuracy")
+      .limit(100);
 
     res.json({
       success: true,
       data: {
         gamesOverTime,
         performanceByGame,
-        totalResults: bestStreaks.length,
+        totalResults: recentResults.length,
+        recentTrend: recentResults.slice(-10), // Last 10 games
       },
     });
   } catch (error) {
@@ -550,152 +561,70 @@ router.get("/analytics/personal", auth, async (req, res) => {
     });
   }
 });
-router.get("/debug-users", async (req, res) => {
+
+// @route   GET /api/results/game-analytics/:gameType
+// @desc    Get analytics for specific game type
+// @access  Public
+router.get("/game-analytics/:gameType", async (req, res) => {
   try {
-    const totalUsers = await User.countDocuments();
-    const activeUsers = await User.countDocuments({ isActive: true });
-    const sampleUsers = await User.find()
-      .limit(5)
-      .select("name email isActive totalScore level gamesPlayed");
+    const { gameType } = req.params;
+    const days = parseInt(req.query.days) || 30;
+
+    // Get basic stats
+    const basicStats = await GameResult.getGameAnalytics(gameType);
+
+    // Get performance over time
+    const performanceOverTime = await GameResult.getPerformanceOverTime(
+      gameType,
+      days
+    );
+
+    // Get level distribution
+    const levelDistribution = await GameResult.getLevelDistribution(gameType);
 
     res.json({
       success: true,
-      debug: {
-        totalUsers,
-        activeUsers,
-        sampleUsers,
-        databaseConnected: true,
+      data: {
+        basicStats: basicStats[0] || {},
+        performanceOverTime,
+        levelDistribution,
       },
     });
   } catch (error) {
-    console.error("Debug xatosi:", error);
-    res.json({
-      success: false,
-      debug: {
-        error: error.message,
-        databaseConnected: false,
-      },
-    });
-  }
-});
-
-router.post("/create-sample-users", async (req, res) => {
-  try {
-    // Faqat development environmentda ishlash
-    if (process.env.NODE_ENV === "production") {
-      return res.status(403).json({
-        success: false,
-        message: "Bu endpoint faqat development uchun",
-      });
-    }
-
-    const existingUsers = await User.countDocuments();
-    if (existingUsers > 0) {
-      return res.json({
-        success: true,
-        message: "Userlar allaqachon mavjud",
-        count: existingUsers,
-      });
-    }
-
-    // Sample userlar
-    const sampleUsers = [
-      {
-        name: "Aziz Rahmonov",
-        email: "aziz@test.com",
-        password: "123456",
-        totalScore: 15000,
-        level: 16,
-        gamesPlayed: 50,
-        averageScore: 300,
-        streak: 12,
-        isActive: true,
-      },
-      {
-        name: "Malika Toshmatova",
-        email: "malika@test.com",
-        password: "123456",
-        totalScore: 12000,
-        level: 13,
-        gamesPlayed: 40,
-        averageScore: 300,
-        streak: 8,
-        isActive: true,
-      },
-      {
-        name: "Bobur Akramov",
-        email: "bobur@test.com",
-        password: "123456",
-        totalScore: 10000,
-        level: 11,
-        gamesPlayed: 35,
-        averageScore: 285,
-        streak: 5,
-        isActive: true,
-      },
-      {
-        name: "Zarina Karimova",
-        email: "zarina@test.com",
-        password: "123456",
-        totalScore: 8000,
-        level: 9,
-        gamesPlayed: 30,
-        averageScore: 266,
-        streak: 3,
-        isActive: true,
-      },
-      {
-        name: "Jasur Nazarov",
-        email: "jasur@test.com",
-        password: "123456",
-        totalScore: 6000,
-        level: 7,
-        gamesPlayed: 25,
-        averageScore: 240,
-        streak: 2,
-        isActive: true,
-      },
-    ];
-
-    // Userlarni yaratish
-    const createdUsers = [];
-    for (const userData of sampleUsers) {
-      const user = new User(userData);
-      await user.save();
-      createdUsers.push({
-        name: user.name,
-        totalScore: user.totalScore,
-        level: user.level,
-      });
-    }
-
-    res.json({
-      success: true,
-      message: "Sample userlar yaratildi",
-      users: createdUsers,
-    });
-  } catch (error) {
-    console.error("Sample userlar yaratishda xato:", error);
+    console.error("Game analytics error:", error);
     res.status(500).json({
       success: false,
-      message: "Xato: " + error.message,
+      message: "Server xatosi",
     });
   }
 });
-function calculateRankingScore(user) {
-  const totalScore = user.totalScore || 0;
-  const level = user.level || 1;
-  const gamesPlayed = user.gamesPlayed || 0;
-  const averageScore = user.averageScore || 0;
-  const streak = user.streak || 0;
 
-  return Math.round(
-    totalScore * 0.5 +
-      level * 150 +
-      gamesPlayed * 3 +
-      averageScore * 0.3 +
-      streak * 10
-  );
-}
+// @route   POST /api/results/update-ranking-scores
+// @desc    Update all users' ranking scores (admin only or migration)
+// @access  Private
+router.post("/update-ranking-scores", auth, async (req, res) => {
+  try {
+    console.log("Starting ranking scores update...");
+
+    const updatedCount = await User.updateAllRankingScores();
+
+    console.log(`Updated ${updatedCount} users' ranking scores`);
+
+    res.json({
+      success: true,
+      message: `${updatedCount} foydalanuvchining reyting ballari yangilandi`,
+      updatedCount,
+    });
+  } catch (error) {
+    console.error("Update ranking scores error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server xatosi",
+    });
+  }
+});
+
+// REMOVE DEBUG AND SAMPLE ENDPOINTS - they were causing issues
+// No more debug-users or create-sample-users endpoints
 
 export default router;

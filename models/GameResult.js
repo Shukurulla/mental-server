@@ -22,6 +22,9 @@ const gameResultSchema = new mongoose.Schema(
         "percentages",
         "readingSpeed",
         "hideAndSeek",
+        // NEW GAMES
+        "flashAnzan",
+        "flashCards",
       ],
     },
     score: {
@@ -81,6 +84,12 @@ const gameResultSchema = new mongoose.Schema(
       screenResolution: String,
       isMobile: Boolean,
     },
+    // NEW: Game-specific ranking score
+    gameRankingScore: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   {
     timestamps: true,
@@ -92,15 +101,45 @@ gameResultSchema.index({ userId: 1, gameType: 1 });
 gameResultSchema.index({ gameType: 1, score: -1 });
 gameResultSchema.index({ userId: 1, createdAt: -1 });
 gameResultSchema.index({ score: -1, createdAt: -1 });
+gameResultSchema.index({ gameType: 1, gameRankingScore: -1 });
+
+// Pre-save middleware to calculate accuracy and game ranking score
+gameResultSchema.pre("save", function (next) {
+  if (this.totalQuestions > 0) {
+    this.accuracy = Math.round(
+      (this.correctAnswers / this.totalQuestions) * 100
+    );
+  }
+
+  // Calculate game-specific ranking score
+  this.gameRankingScore = this.calculateGameRankingScore();
+
+  next();
+});
+
+// Instance method to calculate game-specific ranking score
+gameResultSchema.methods.calculateGameRankingScore = function () {
+  const score = this.score || 0;
+  const level = this.level || 1;
+  const accuracy = this.accuracy || 0;
+  const duration = this.duration || 1;
+
+  // Game-specific ranking formula:
+  // score * 0.6 + level * 50 + accuracy * 2 + (3600 / duration) * 0.5
+  // Duration bonus: faster completion gets higher score
+  const durationBonus = duration > 0 ? (3600 / duration) * 0.5 : 0;
+
+  return Math.round(score * 0.6 + level * 50 + accuracy * 2 + durationBonus);
+};
 
 // Static method to get user's best score for a game
 gameResultSchema.statics.getUserBestScore = function (userId, gameType) {
   return this.findOne({ userId, gameType })
     .sort({ score: -1 })
-    .select("score level createdAt");
+    .select("score level createdAt gameRankingScore");
 };
 
-// Static method to get leaderboard
+// Static method to get leaderboard for specific game
 gameResultSchema.statics.getLeaderboard = function (gameType, limit = 10) {
   const pipeline = [
     { $match: { gameType } },
@@ -109,7 +148,11 @@ gameResultSchema.statics.getLeaderboard = function (gameType, limit = 10) {
         _id: "$userId",
         bestScore: { $max: "$score" },
         gamesPlayed: { $sum: 1 },
+        avgScore: { $avg: "$score" },
+        bestLevel: { $max: "$level" },
         lastPlayed: { $max: "$createdAt" },
+        totalDuration: { $sum: "$duration" },
+        gameRankingScore: { $max: "$gameRankingScore" },
       },
     },
     {
@@ -126,13 +169,24 @@ gameResultSchema.statics.getLeaderboard = function (gameType, limit = 10) {
         _id: 1,
         bestScore: 1,
         gamesPlayed: 1,
+        avgScore: { $round: ["$avgScore", 1] },
+        bestLevel: 1,
         lastPlayed: 1,
+        totalDuration: 1,
+        gameRankingScore: 1,
         "user.name": 1,
         "user.avatar": 1,
         "user.level": 1,
       },
     },
-    { $sort: { bestScore: -1 } },
+    {
+      $sort: {
+        gameRankingScore: -1,
+        bestScore: -1,
+        gamesPlayed: -1,
+        _id: 1,
+      },
+    },
     { $limit: limit },
   ];
 
@@ -148,7 +202,9 @@ gameResultSchema.statics.getUserHistory = function (
   return this.find({ userId, gameType })
     .sort({ createdAt: -1 })
     .limit(limit)
-    .select("score level duration accuracy createdAt settings");
+    .select(
+      "score level duration accuracy createdAt settings gameRankingScore"
+    );
 };
 
 // Static method to get game analytics
@@ -163,6 +219,8 @@ gameResultSchema.statics.getGameAnalytics = function (gameType) {
         maxScore: { $max: "$score" },
         minScore: { $min: "$score" },
         averageDuration: { $avg: "$duration" },
+        maxDuration: { $max: "$duration" },
+        minDuration: { $min: "$duration" },
         averageAccuracy: { $avg: "$accuracy" },
         uniquePlayers: { $addToSet: "$userId" },
       },
@@ -175,6 +233,8 @@ gameResultSchema.statics.getGameAnalytics = function (gameType) {
         maxScore: 1,
         minScore: 1,
         averageDuration: { $round: ["$averageDuration", 2] },
+        maxDuration: 1,
+        minDuration: 1,
         averageAccuracy: { $round: ["$averageAccuracy", 2] },
         uniquePlayers: { $size: "$uniquePlayers" },
       },
@@ -184,14 +244,75 @@ gameResultSchema.statics.getGameAnalytics = function (gameType) {
   return this.aggregate(pipeline);
 };
 
-// Pre-save middleware to calculate accuracy
-gameResultSchema.pre("save", function (next) {
-  if (this.totalQuestions > 0) {
-    this.accuracy = Math.round(
-      (this.correctAnswers / this.totalQuestions) * 100
-    );
-  }
-  next();
-});
+// Static method to get performance over time
+gameResultSchema.statics.getPerformanceOverTime = function (
+  gameType,
+  days = 30
+) {
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days);
+
+  const pipeline = [
+    {
+      $match: {
+        gameType,
+        createdAt: { $gte: startDate },
+      },
+    },
+    {
+      $group: {
+        _id: {
+          date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+        },
+        avgScore: { $avg: "$score" },
+        gamesPlayed: { $sum: 1 },
+        avgDuration: { $avg: "$duration" },
+        avgAccuracy: { $avg: "$accuracy" },
+        uniquePlayers: { $addToSet: "$userId" },
+      },
+    },
+    {
+      $project: {
+        date: "$_id.date",
+        avgScore: { $round: ["$avgScore", 2] },
+        gamesPlayed: 1,
+        avgDuration: { $round: ["$avgDuration", 2] },
+        avgAccuracy: { $round: ["$avgAccuracy", 2] },
+        uniquePlayers: { $size: "$uniquePlayers" },
+      },
+    },
+    { $sort: { "_id.date": 1 } },
+  ];
+
+  return this.aggregate(pipeline);
+};
+
+// Static method to get level distribution
+gameResultSchema.statics.getLevelDistribution = function (gameType) {
+  const pipeline = [
+    { $match: { gameType } },
+    {
+      $group: {
+        _id: "$level",
+        count: { $sum: 1 },
+        avgScore: { $avg: "$score" },
+        avgDuration: { $avg: "$duration" },
+        avgAccuracy: { $avg: "$accuracy" },
+      },
+    },
+    {
+      $project: {
+        level: "$_id",
+        count: 1,
+        avgScore: { $round: ["$avgScore", 2] },
+        avgDuration: { $round: ["$avgDuration", 2] },
+        avgAccuracy: { $round: ["$avgAccuracy", 2] },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ];
+
+  return this.aggregate(pipeline);
+};
 
 export default mongoose.model("GameResult", gameResultSchema);

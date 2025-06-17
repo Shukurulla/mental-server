@@ -49,6 +49,24 @@ const userSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    // NEW: Ranking score for leaderboard
+    rankingScore: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    // NEW: Average score calculation
+    averageScore: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    // NEW: Streak counter
+    streak: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     achievements: [
       {
         name: String,
@@ -65,56 +83,80 @@ const userSchema = new mongoose.Schema(
         bestScore: { type: Number, default: 0 },
         gamesPlayed: { type: Number, default: 0 },
         averageScore: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
       },
       tileMemory: {
         bestScore: { type: Number, default: 0 },
         gamesPlayed: { type: Number, default: 0 },
         averageScore: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
       },
       alphaNumMemory: {
         bestScore: { type: Number, default: 0 },
         gamesPlayed: { type: Number, default: 0 },
         averageScore: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
       },
       schulteTable: {
         bestTime: { type: Number, default: 0 },
         gamesPlayed: { type: Number, default: 0 },
         averageTime: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
       },
       doubleSchulte: {
         bestTime: { type: Number, default: 0 },
         gamesPlayed: { type: Number, default: 0 },
         averageTime: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
       },
       mathSystems: {
         bestScore: { type: Number, default: 0 },
         gamesPlayed: { type: Number, default: 0 },
         averageScore: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
       },
       gcdLcm: {
         bestScore: { type: Number, default: 0 },
         gamesPlayed: { type: Number, default: 0 },
         averageScore: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
       },
       fractions: {
         bestScore: { type: Number, default: 0 },
         gamesPlayed: { type: Number, default: 0 },
         averageScore: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
       },
       percentages: {
         bestScore: { type: Number, default: 0 },
         gamesPlayed: { type: Number, default: 0 },
         averageScore: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
       },
       readingSpeed: {
         bestSpeed: { type: Number, default: 0 },
         gamesPlayed: { type: Number, default: 0 },
         averageSpeed: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
       },
       hideAndSeek: {
         bestScore: { type: Number, default: 0 },
         gamesPlayed: { type: Number, default: 0 },
         averageScore: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
+      },
+      // NEW GAMES
+      flashAnzan: {
+        bestScore: { type: Number, default: 0 },
+        gamesPlayed: { type: Number, default: 0 },
+        averageScore: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
+      },
+      flashCards: {
+        bestScore: { type: Number, default: 0 },
+        gamesPlayed: { type: Number, default: 0 },
+        averageScore: { type: Number, default: 0 },
+        lastPlayed: { type: Date },
       },
     },
     preferences: {
@@ -175,18 +217,29 @@ userSchema.methods.updateGameStats = function (
   score,
   isTimeScore = false
 ) {
-  if (!this.gameStats[gameType]) return;
+  if (!this.gameStats[gameType]) {
+    // Initialize game stats if not exists
+    this.gameStats[gameType] = {
+      bestScore: 0,
+      gamesPlayed: 0,
+      averageScore: 0,
+      lastPlayed: new Date(),
+    };
+  }
 
   const stats = this.gameStats[gameType];
   stats.gamesPlayed += 1;
+  stats.lastPlayed = new Date();
 
   if (isTimeScore) {
+    // For time-based games (lower is better)
     if (stats.bestTime === 0 || score < stats.bestTime) {
       stats.bestTime = score;
     }
     stats.averageTime =
       (stats.averageTime * (stats.gamesPlayed - 1) + score) / stats.gamesPlayed;
   } else {
+    // For score-based games (higher is better)
     if (score > stats.bestScore) {
       stats.bestScore = score;
     }
@@ -195,17 +248,82 @@ userSchema.methods.updateGameStats = function (
       stats.gamesPlayed;
   }
 
+  // Update overall user stats
   this.totalScore += score;
   this.gamesPlayed += 1;
 
-  // Level calculation
+  // Calculate average score
+  this.averageScore = this.totalScore / this.gamesPlayed;
+
+  // Level calculation (every 1000 points = 1 level)
   this.level = Math.floor(this.totalScore / 1000) + 1;
+
+  // Calculate ranking score
+  this.rankingScore = this.calculateRankingScore();
+
+  // Mark as modified for MongoDB
+  this.markModified("gameStats");
 };
 
-// Virtual for user rank
+// Calculate ranking score method
+userSchema.methods.calculateRankingScore = function () {
+  const totalScore = this.totalScore || 0;
+  const level = this.level || 1;
+  const gamesPlayed = this.gamesPlayed || 0;
+  const averageScore = this.averageScore || 0;
+  const streak = this.streak || 0;
+
+  // Ranking formula:
+  // totalScore * 0.5 + level * 150 + gamesPlayed * 3 + averageScore * 0.3 + streak * 10
+  return Math.round(
+    totalScore * 0.5 +
+      level * 150 +
+      gamesPlayed * 3 +
+      averageScore * 0.3 +
+      streak * 10
+  );
+};
+
+// Virtual for user rank (deprecated, use rankingScore instead)
 userSchema.virtual("rank").get(function () {
   return this.level * 100 + this.totalScore;
 });
+
+// Index for better performance
+userSchema.index({ rankingScore: -1 });
+userSchema.index({ totalScore: -1 });
+userSchema.index({ level: -1 });
+userSchema.index({ isActive: 1 });
+userSchema.index({ email: 1 });
+
+// Static method to get leaderboard
+userSchema.statics.getGlobalLeaderboard = function (limit = 50) {
+  return this.find({ isActive: true })
+    .select(
+      "name avatar totalScore level gamesPlayed rankingScore averageScore streak"
+    )
+    .sort({
+      rankingScore: -1,
+      totalScore: -1,
+      level: -1,
+      gamesPlayed: -1,
+      _id: 1, // For consistent sorting
+    })
+    .limit(limit)
+    .lean();
+};
+
+// Static method to update all users' ranking scores (for migration)
+userSchema.statics.updateAllRankingScores = async function () {
+  const users = await this.find({ isActive: true });
+
+  for (const user of users) {
+    user.rankingScore = user.calculateRankingScore();
+    await user.save();
+  }
+
+  return users.length;
+};
 
 userSchema.set("toJSON", { virtuals: true });
 
