@@ -3,6 +3,7 @@ import { body, validationResult } from "express-validator";
 import auth from "../middleware/auth.js";
 import GameResult from "../models/GameResult.js";
 import User from "../models/User.js";
+import mongoose from "mongoose";
 
 const router = express.Router();
 
@@ -79,16 +80,67 @@ router.get("/leaderboard/:gameType", async (req, res) => {
 
     console.log(`Getting leaderboard for ${gameType}, limit: ${limit}`);
 
-    const leaderboard = await GameResult.getLeaderboard(gameType, limit);
+    // VALIDATION OLIB TASHLANDI - har qanday gameType qabul qilamiz
 
-    // Add rank to each user
+    // Avval o'sha o'yin turida natija bor foydalanuvchilarni topamiz
+    const gameResults = await GameResult.find({ gameType })
+      .populate("userId", "name avatar level")
+      .sort({ score: -1 })
+      .limit(limit * 3); // Ko'proq olish, keyin eng yaxshisini tanlaymiz
+
+    console.log(`Found ${gameResults.length} game results for ${gameType}`);
+
+    if (gameResults.length === 0) {
+      // Agar bu o'yin turi uchun natija yo'q bo'lsa
+      return res.json({
+        success: true,
+        data: [],
+        total: 0,
+        message: `${gameType} o'yini uchun hali natijalar yo'q`,
+      });
+    }
+
+    // Har bir foydalanuvchining eng yaxshi natijasini olish
+    const userBestScores = {};
+
+    for (const result of gameResults) {
+      if (!result.userId) continue; // populate bo'lmagan holatlar uchun
+
+      const userId = result.userId._id.toString();
+
+      if (
+        !userBestScores[userId] ||
+        result.score > userBestScores[userId].bestScore
+      ) {
+        userBestScores[userId] = {
+          _id: result.userId._id,
+          id: result.userId._id,
+          name: result.userId.name || "Noma'lum foydalanuvchi",
+          avatar: result.userId.avatar,
+          level: result.userId.level || 1,
+          bestScore: result.score || 0,
+          gameRankingScore: result.gameRankingScore || 0,
+          lastPlayed: result.createdAt,
+        };
+      }
+    }
+
+    // Massivga aylantirib, saralash
+    const leaderboard = Object.values(userBestScores)
+      .sort((a, b) => b.bestScore - a.bestScore)
+      .slice(0, limit);
+
+    // Rank qo'shish
     const rankedLeaderboard = leaderboard.map((user, index) => ({
       ...user,
       rank: index + 1,
+      totalScore: user.bestScore,
+      gamesPlayed: 1, // Bu yerda aniq raqam bo'lishi kerak, lekin soddalik uchun 1
+      averageScore: user.bestScore,
     }));
 
     console.log(
-      `Found ${rankedLeaderboard.length} users for ${gameType} leaderboard`
+      `Returning ${rankedLeaderboard.length} users for ${gameType} leaderboard`
     );
 
     res.json({
@@ -106,25 +158,48 @@ router.get("/leaderboard/:gameType", async (req, res) => {
   }
 });
 
+// results.js - Soddalashtirilgan versiya
+
 // @route   GET /api/results/leaderboard/global
-// @desc    Get global leaderboard (all games combined)
+// @desc    Get global leaderboard (all games combined) - SODDA VERSIYA
 // @access  Public
+
 router.get("/leaderboard/global", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
 
     console.log("Getting global leaderboard, limit:", limit);
 
-    // Use the static method from User model
-    const users = await User.getGlobalLeaderboard(limit);
+    // ODDIY USUL: Faqat userlarni olish
+    const users = await User.find()
+      .sort({
+        totalScore: -1, // Eng yuqori ball bo'yicha
+        level: -1, // Keyin daraja bo'yicha
+        gamesPlayed: -1, // Keyin o'yinlar soni bo'yicha
+      })
+      .limit(limit);
+    console.log(users);
 
-    console.log(`Found ${users.length} users for global leaderboard`);
-
-    // Add rank to each user
+    // Oddiy rank qo'shish
     const rankedUsers = users.map((user, index) => ({
-      ...user,
+      _id: user._id,
+      id: user._id,
       rank: index + 1,
+      name: user.name || "Foydalanuvchi",
+      avatar: user.avatar,
+      level: user.level || 1,
+      totalScore: user.totalScore || 0,
+      gamesPlayed: user.gamesPlayed || 0,
+      rankingScore: user.rankingScore || 0,
+      averageScore:
+        user.gamesPlayed > 0
+          ? Math.round(user.totalScore / user.gamesPlayed)
+          : 0,
+      streak: user.streak || 0,
     }));
+    console.log(users);
+
+    console.log(`Returning ${rankedUsers.length} users for global leaderboard`);
 
     res.json({
       success: true,
@@ -137,6 +212,123 @@ router.get("/leaderboard/global", async (req, res) => {
       success: false,
       message: "Server xatosi: " + error.message,
       data: [],
+    });
+  }
+});
+
+// @route   GET /api/results/leaderboard/:gameType
+// @desc    Get leaderboard for specific game type - SODDA VERSIYA
+// @access  Public
+router.get("/leaderboard/:gameType", async (req, res) => {
+  try {
+    const { gameType } = req.params;
+    const limit = parseInt(req.query.limit) || 50;
+
+    console.log(`Getting leaderboard for ${gameType}, limit: ${limit}`);
+
+    // Avval o'sha o'yin turida natija bor foydalanuvchilarni topamiz
+    const gameResults = await GameResult.find({ gameType })
+      .populate("userId", "name avatar level")
+      .sort({ score: -1 })
+      .limit(limit);
+
+    console.log(`Found ${gameResults.length} game results for ${gameType}`);
+
+    // Har bir foydalanuvchining eng yaxshi natijasini olish
+    const userBestScores = {};
+
+    for (const result of gameResults) {
+      const userId = result.userId._id.toString();
+
+      if (
+        !userBestScores[userId] ||
+        result.score > userBestScores[userId].score
+      ) {
+        userBestScores[userId] = {
+          _id: result.userId._id,
+          id: result.userId._id,
+          name: result.userId.name,
+          avatar: result.userId.avatar,
+          level: result.userId.level,
+          bestScore: result.score,
+          gameRankingScore: result.gameRankingScore || 0,
+        };
+      }
+    }
+
+    // Massivga aylantirib, saralash
+    const leaderboard = Object.values(userBestScores)
+      .sort((a, b) => b.bestScore - a.bestScore)
+      .slice(0, limit);
+
+    // Rank qo'shish
+    const rankedLeaderboard = leaderboard.map((user, index) => ({
+      ...user,
+      rank: index + 1,
+      totalScore: user.bestScore,
+      gamesPlayed: 1, // Bu yerda aniq raqam bo'lishi kerak, lekin soddalik uchun 1
+      averageScore: user.bestScore,
+    }));
+
+    console.log(
+      `Returning ${rankedLeaderboard.length} users for ${gameType} leaderboard`
+    );
+
+    res.json({
+      success: true,
+      data: rankedLeaderboard,
+      total: rankedLeaderboard.length,
+    });
+  } catch (error) {
+    console.error("Get leaderboard error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server xatosi: " + error.message,
+      data: [],
+    });
+  }
+});
+
+// @route   GET /api/results/check-data
+// @desc    Ma'lumotlar bazasini tekshirish
+// @access  Public
+router.get("/check-data", async (req, res) => {
+  try {
+    // Oddiy hisoblar
+    const totalUsers = await User.countDocuments();
+    const totalGameResults = await GameResult.countDocuments();
+
+    // Eng yuqori ballli foydalanuvchilar
+    const topUsers = await User.find()
+      .select("name totalScore gamesPlayed")
+      .sort({ totalScore: -1 })
+      .limit(5);
+
+    // Eng ko'p o'ynagan foydalanuvchilar
+    const activeUsers = await User.find({ gamesPlayed: { $gt: 0 } })
+      .select("name gamesPlayed totalScore")
+      .sort({ gamesPlayed: -1 })
+      .limit(5);
+
+    // O'yin natijalar bo'yicha
+    const gameTypes = await GameResult.distinct("gameType");
+
+    res.json({
+      success: true,
+      data: {
+        totalUsers,
+        totalGameResults,
+        topUsers,
+        activeUsers,
+        gameTypes,
+        hasData: totalUsers > 0 && totalGameResults > 0,
+      },
+    });
+  } catch (error) {
+    console.error("Check data error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Server xatosi: " + error.message,
     });
   }
 });
@@ -180,8 +372,9 @@ router.get("/stats", auth, async (req, res) => {
 
     // Get user rank in global leaderboard
     const higherRankedCount = await User.countDocuments({
-      rankingScore: { $gt: user.rankingScore },
-      isActive: true,
+      rankingScore: { $gt: user.rankingScore || 0 },
+      isActive: { $ne: false },
+      gamesPlayed: { $gt: 0 },
     });
     const userRank = higherRankedCount + 1;
 
@@ -490,7 +683,7 @@ router.delete("/:id", auth, async (req, res) => {
 // @access  Private
 router.get("/analytics/personal", auth, async (req, res) => {
   try {
-    const userId = req.user.userId;
+    const userId = new mongoose.Types.ObjectId(req.user.userId);
 
     // Games played over time
     const gamesOverTime = await GameResult.aggregate([
@@ -606,7 +799,36 @@ router.post("/update-ranking-scores", auth, async (req, res) => {
   try {
     console.log("Starting ranking scores update...");
 
-    const updatedCount = await User.updateAllRankingScores();
+    // Get all users
+    const users = await User.find({ gamesPlayed: { $gt: 0 } });
+    let updatedCount = 0;
+
+    for (const user of users) {
+      const oldRankingScore = user.rankingScore || 0;
+
+      // Calculate new ranking score
+      const totalScore = user.totalScore || 0;
+      const level = user.level || 1;
+      const gamesPlayed = user.gamesPlayed || 0;
+      const averageScore = gamesPlayed > 0 ? totalScore / gamesPlayed : 0;
+      const streak = user.streak || 0;
+
+      const newRankingScore = Math.round(
+        totalScore * 0.5 +
+          level * 150 +
+          gamesPlayed * 3 +
+          averageScore * 0.3 +
+          streak * 10
+      );
+
+      // Update if different
+      if (newRankingScore !== oldRankingScore) {
+        await User.findByIdAndUpdate(user._id, {
+          rankingScore: newRankingScore,
+        });
+        updatedCount++;
+      }
+    }
 
     console.log(`Updated ${updatedCount} users' ranking scores`);
 
@@ -623,8 +845,5 @@ router.post("/update-ranking-scores", auth, async (req, res) => {
     });
   }
 });
-
-// REMOVE DEBUG AND SAMPLE ENDPOINTS - they were causing issues
-// No more debug-users or create-sample-users endpoints
 
 export default router;

@@ -162,8 +162,7 @@ export const startGame = async (req, res) => {
       level,
       settings,
     });
-  } catch (error) {
-    console.error("Start game error:", error);
+  } catch (err) {
     res.status(500).json({
       success: false,
       message: "Server xatosi",

@@ -10,6 +10,7 @@ import authRoutes from "./routes/auth.js";
 import gameRoutes from "./routes/games.js";
 import resultRoutes from "./routes/results.js";
 import adminRoutes from "./routes/admin.js";
+import User from "./models/User.js";
 
 dotenv.config();
 
