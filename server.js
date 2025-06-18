@@ -24,7 +24,13 @@ connectDB();
 app.use(helmet());
 app.use(
   cors({
-    origin: "*",
+    origin: [
+      "http://localhost:5173",
+      "http://localhost:5174",
+      "http://localhost:5175",
+      "https://mental-client.vercel.app/",
+    ],
+    credentials: true,
   })
 );
 
