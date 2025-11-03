@@ -19,14 +19,20 @@ const generateToken = (userId) => {
 router.post(
   "/register",
   [
-    body("name")
+    body("firstName")
       .trim()
       .isLength({ min: 2, max: 50 })
       .withMessage("Ism 2-50 belgi orasida bo'lishi kerak"),
-    body("email")
-      .isEmail()
-      .normalizeEmail()
-      .withMessage("To'g'ri email formatini kiriting"),
+    body("lastName")
+      .trim()
+      .isLength({ min: 2, max: 50 })
+      .withMessage("Familiya 2-50 belgi orasida bo'lishi kerak"),
+    body("username")
+      .trim()
+      .isLength({ min: 3, max: 30 })
+      .withMessage("Username 3-30 belgi orasida bo'lishi kerak")
+      .matches(/^[a-zA-Z0-9_]+$/)
+      .withMessage("Username faqat harf, raqam va _ belgisidan iborat bo'lishi mumkin"),
     body("password")
       .isLength({ min: 6 })
       .withMessage("Parol kamida 6 ta belgidan iborat bo'lishi kerak"),
@@ -43,23 +49,24 @@ router.post(
         });
       }
 
-      const { name, email, password, role } = req.body;
+      const { firstName, lastName, username, password } = req.body;
 
       // Check if user already exists
-      const existingUser = await User.findOne({ email });
+      const existingUser = await User.findOne({ username });
       if (existingUser) {
         return res.status(400).json({
           success: false,
-          message: "Bu email bilan foydalanuvchi allaqachon mavjud",
+          message: "Bu username allaqachon band",
         });
       }
 
       // Create new user
       const user = new User({
-        name,
-        email,
+        firstName,
+        lastName,
+        username,
         password,
-        role,
+        email: `${username}@mental.uz`, // Auto-generate email
       });
 
       await user.save();
@@ -73,6 +80,9 @@ router.post(
         token,
         user: {
           id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          username: user.username,
           name: user.name,
           email: user.email,
           level: user.level,
@@ -96,10 +106,10 @@ router.post(
 router.post(
   "/login",
   [
-    body("email")
-      .isEmail()
-      .normalizeEmail()
-      .withMessage("To'g'ri email formatini kiriting"),
+    body("username")
+      .trim()
+      .notEmpty()
+      .withMessage("Username kiritish majburiy"),
     body("password").notEmpty().withMessage("Parol kiritish majburiy"),
   ],
   async (req, res) => {
@@ -114,14 +124,14 @@ router.post(
         });
       }
 
-      const { email, password } = req.body;
+      const { username, password } = req.body;
 
-      // Find user by email
-      const user = await User.findOne({ email });
+      // Find user by username
+      const user = await User.findOne({ username });
       if (!user) {
         return res.status(400).json({
           success: false,
-          message: "Email yoki parol noto'g'ri",
+          message: "Username yoki parol noto'g'ri",
         });
       }
 
@@ -130,7 +140,7 @@ router.post(
       if (!isPasswordMatch) {
         return res.status(400).json({
           success: false,
-          message: "Email yoki parol noto'g'ri",
+          message: "Username yoki parol noto'g'ri",
         });
       }
 
@@ -147,6 +157,9 @@ router.post(
         token,
         user: {
           id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          username: user.username,
           name: user.name,
           email: user.email,
           level: user.level,

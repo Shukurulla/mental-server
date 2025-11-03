@@ -2,35 +2,38 @@ import { body } from "express-validator";
 
 // User registration validation
 export const validateRegistration = [
-  body("name")
+  body("firstName")
     .trim()
     .isLength({ min: 2, max: 50 })
     .withMessage("Ism 2-50 belgi orasida bo'lishi kerak")
     .matches(/^[a-zA-Z\s\u0400-\u04FF\u0100-\u017F]+$/)
     .withMessage("Ism faqat harflardan iborat bo'lishi kerak"),
 
-  body("email")
-    .isEmail()
-    .normalizeEmail()
-    .withMessage("To'g'ri email formatini kiriting")
-    .isLength({ max: 100 })
-    .withMessage("Email 100 belgidan ko'p bo'lmasligi kerak"),
+  body("lastName")
+    .trim()
+    .isLength({ min: 2, max: 50 })
+    .withMessage("Familiya 2-50 belgi orasida bo'lishi kerak")
+    .matches(/^[a-zA-Z\s\u0400-\u04FF\u0100-\u017F]+$/)
+    .withMessage("Familiya faqat harflardan iborat bo'lishi kerak"),
+
+  body("username")
+    .trim()
+    .isLength({ min: 3, max: 30 })
+    .withMessage("Username 3-30 belgi orasida bo'lishi kerak")
+    .matches(/^[a-zA-Z0-9_]+$/)
+    .withMessage("Username faqat harf, raqam va _ belgisidan iborat bo'lishi kerak"),
 
   body("password")
     .isLength({ min: 6, max: 128 })
-    .withMessage("Parol 6-128 belgi orasida bo'lishi kerak")
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
-    .withMessage(
-      "Parol kamida bitta kichik harf, katta harf va raqam bo'lishi kerak"
-    ),
+    .withMessage("Parol 6-128 belgi orasida bo'lishi kerak"),
 ];
 
 // User login validation
 export const validateLogin = [
-  body("email")
-    .isEmail()
-    .normalizeEmail()
-    .withMessage("To'g'ri email formatini kiriting"),
+  body("username")
+    .trim()
+    .notEmpty()
+    .withMessage("Username kiritish majburiy"),
 
   body("password")
     .notEmpty()

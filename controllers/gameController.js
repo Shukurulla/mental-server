@@ -64,7 +64,7 @@ const GAME_TYPES = {
     scoreMultiplier: 8,
   },
   hideAndSeek: {
-    name: "Berkinchoq",
+    name: "Berkinmachoq",
     description: "Yashiringan raqamlarning joyini toping",
     maxLevel: 15,
     scoreMultiplier: 13,

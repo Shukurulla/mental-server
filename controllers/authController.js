@@ -23,19 +23,25 @@ export const registerUser = async (req, res) => {
       });
     }
 
-    const { name, email, password } = req.body;
+    const { firstName, lastName, username, password } = req.body;
 
-    // Check if user exists
-    const existingUser = await User.findOne({ email });
+    // Check if username exists
+    const existingUser = await User.findOne({ username });
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: "Bu email bilan foydalanuvchi allaqachon mavjud",
+        message: "Bu username allaqachon band",
       });
     }
 
     // Create user
-    const user = new User({ name, email, password });
+    const user = new User({
+      firstName,
+      lastName,
+      username,
+      password,
+      email: `${username}@mental.uz` // Auto-generate email
+    });
     await user.save();
 
     // Generate token
@@ -47,6 +53,9 @@ export const registerUser = async (req, res) => {
       token,
       user: {
         id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        username: user.username,
         name: user.name,
         email: user.email,
         level: user.level,
@@ -77,14 +86,14 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    const { email, password } = req.body;
+    const { username, password } = req.body;
 
-    // Find user
-    const user = await User.findOne({ email });
+    // Find user by username
+    const user = await User.findOne({ username });
     if (!user) {
       return res.status(400).json({
         success: false,
-        message: "Email yoki parol noto'g'ri",
+        message: "Username yoki parol noto'g'ri",
       });
     }
 
@@ -93,7 +102,7 @@ export const loginUser = async (req, res) => {
     if (!isPasswordMatch) {
       return res.status(400).json({
         success: false,
-        message: "Email yoki parol noto'g'ri",
+        message: "Username yoki parol noto'g'ri",
       });
     }
 
@@ -110,6 +119,9 @@ export const loginUser = async (req, res) => {
       token,
       user: {
         id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        username: user.username,
         name: user.name,
         email: user.email,
         level: user.level,

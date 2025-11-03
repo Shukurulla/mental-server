@@ -3,17 +3,41 @@ import bcrypt from "bcryptjs";
 
 const userSchema = new mongoose.Schema(
   {
-    name: {
+    firstName: {
       type: String,
       required: [true, "Ism kiritish majburiy"],
       trim: true,
       minlength: [2, "Ism kamida 2 ta belgidan iborat bo'lishi kerak"],
       maxlength: [50, "Ism 50 ta belgidan ko'p bo'lmasligi kerak"],
     },
+    lastName: {
+      type: String,
+      required: [true, "Familiya kiritish majburiy"],
+      trim: true,
+      minlength: [2, "Familiya kamida 2 ta belgidan iborat bo'lishi kerak"],
+      maxlength: [50, "Familiya 50 ta belgidan ko'p bo'lmasligi kerak"],
+    },
+    username: {
+      type: String,
+      required: [true, "Username kiritish majburiy"],
+      unique: true,
+      lowercase: true,
+      trim: true,
+      minlength: [3, "Username kamida 3 ta belgidan iborat bo'lishi kerak"],
+      maxlength: [30, "Username 30 ta belgidan ko'p bo'lmasligi kerak"],
+      match: [
+        /^[a-zA-Z0-9_]+$/,
+        "Username faqat harf, raqam va _ belgisidan iborat bo'lishi kerak",
+      ],
+    },
+    name: {
+      type: String,
+      // Computed field: firstName + lastName
+    },
     email: {
       type: String,
-      required: [true, "Email kiritish majburiy"],
       unique: true,
+      sparse: true, // Email optional
       lowercase: true,
       match: [
         /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/,
@@ -193,8 +217,14 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Hash password before saving
+// Hash password before saving and set name field
 userSchema.pre("save", async function (next) {
+  // Set full name
+  if (this.firstName && this.lastName) {
+    this.name = `${this.firstName} ${this.lastName}`;
+  }
+
+  // Hash password if modified
   if (!this.isModified("password")) return next();
 
   try {
